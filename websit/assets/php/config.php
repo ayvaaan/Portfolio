@@ -1,25 +1,44 @@
 <?php
-// Database Configuration
-// Update these values with your actual database credentials
-
-define('DB_HOST', 'localhost'); // Your database host
-define('DB_USER', 'root'); // Your database username
-define('DB_PASS', 'ivangwapo123'); // Your database password
-define('DB_NAME', 'portfolio_db'); // Your database name
-
-// Create connection
-$conn = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
-
-// Check connection
-if ($conn->connect_error) {
-    die(json_encode(['success' => false, 'message' => 'Database connection failed: ' . $conn->connect_error]));
+// Load environment variables from a local .env file (optional) and export them into getenv().
+$envFile = __DIR__ . '/../../.env';
+if (file_exists($envFile)) {
+    $vars = parse_ini_file($envFile);
+    if (is_array($vars)) {
+        foreach ($vars as $k => $v) {
+            if (getenv($k) === false) {
+                putenv("$k=$v");
+                $_ENV[$k] = $v;
+            }
+        }
+    }
 }
 
-// Set charset to UTF-8
-$conn->set_charset("utf8mb4");
+// Database configuration (use environment variables when available)
+define('DB_HOST', getenv('DB_HOST') ?: 'localhost');
+define('DB_USER', getenv('DB_USER') ?: 'root');
+define('DB_PASS', getenv('DB_PASS') ?: '');
+define('DB_NAME', getenv('DB_NAME') ?: 'portfolio_db');
 
-// Define admin credentials (change these to your actual credentials)
-define('ADMIN_USERNAME', 'ivan');
-define('ADMIN_PASSWORD', 'ivangwapo123'); // Change this to a strong password
+// Connect using PDO for prepared statements and better error handling
+try {
+    $dsn = 'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=utf8mb4';
+    $pdo = new PDO($dsn, DB_USER, DB_PASS, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
+} catch (PDOException $e) {
+    http_response_code(500);
+    // Don't leak credentials or internal info in production
+    die(json_encode(['success' => false, 'message' => 'Database connection failed']));
+}
+
+// Admin credentials - DO NOT keep defaults in production. Prefer using admin_users table and password hashes.
+define('ADMIN_USERNAME', getenv('ADMIN_USERNAME') ?: 'admin');
+// Provide an ADMIN_PASSWORD_HASH environment variable (generated via password_hash()).
+define('ADMIN_PASSWORD_HASH', getenv('ADMIN_PASSWORD_HASH') ?: password_hash('change_me', PASSWORD_DEFAULT));
+
+// Optional: allowed origin for CORS (set ALLOWED_ORIGIN in .env to restrict)
+// If empty, CORS is set to '*'. In production set this to your site URL.
+define('ALLOWED_ORIGIN', getenv('ALLOWED_ORIGIN') ?: '');
 
 ?>

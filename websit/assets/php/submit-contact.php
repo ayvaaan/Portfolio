@@ -1,9 +1,14 @@
 <?php
 header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST');
+// CORS: allow only configured origin if set; otherwise allow all (use restrictive setting in production)
+require_once __DIR__ . '/config.php';
 
-require_once 'config.php';
+if (ALLOWED_ORIGIN) {
+    header('Access-Control-Allow-Origin: ' . ALLOWED_ORIGIN);
+} else {
+    header('Access-Control-Allow-Origin: *');
+}
+header('Access-Control-Allow-Methods: POST');
 
 // Only accept POST requests
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -12,63 +17,68 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-// Get POST data
-$name = isset($_POST['name']) ? trim($_POST['name']) : '';
-$email = isset($_POST['email']) ? trim($_POST['email']) : '';
-$message = isset($_POST['message']) ? trim($_POST['message']) : '';
+// Get POST data (support JSON payloads as well)
+$input = $_POST;
+$contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+if (stripos($contentType, 'application/json') !== false) {
+    $raw = file_get_contents('php://input');
+    $json = json_decode($raw, true);
+    if (json_last_error() === JSON_ERROR_NONE && is_array($json)) {
+        $input = array_merge($input, $json);
+    }
+}
+
+$name = isset($input['name']) ? trim($input['name']) : '';
+$email = isset($input['email']) ? trim($input['email']) : '';
+$message = isset($input['message']) ? trim($input['message']) : '';
 
 // Validate input
 $errors = [];
+if ($name === '') $errors[] = 'Name is required';
+if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'Valid email is required';
+if ($message === '' || mb_strlen($message) < 5) $errors[] = 'Message must be at least 5 characters long';
 
-if (empty($name)) {
-    $errors[] = 'Name is required';
-}
-
-if (empty($email) || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-    $errors[] = 'Valid email is required';
-}
-
-if (empty($message) || strlen($message) < 5) {
-    $errors[] = 'Message must be at least 5 characters long';
-}
-
-// Return errors if validation fails
 if (!empty($errors)) {
     http_response_code(400);
     echo json_encode(['success' => false, 'errors' => $errors]);
     exit;
 }
 
-// Sanitize input
-$name = htmlspecialchars($name, ENT_QUOTES, 'UTF-8');
-$email = htmlspecialchars($email, ENT_QUOTES, 'UTF-8');
-$message = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
+// Sanitize for storage or store raw and escape on output. Here we store raw but strip dangerous tags.
+$clean_name = strip_tags($name);
+$clean_email = filter_var($email, FILTER_SANITIZE_EMAIL);
+$clean_message = strip_tags($message, '<p><br><strong><em><ul><ol><li>'); // allow minimal formatting
 
-// Insert into database using prepared statement
-$sql = "INSERT INTO contacts (name, email, message, status) VALUES (?, ?, ?, 'unread')";
-$stmt = $conn->prepare($sql);
+try {
+    $sql = "INSERT INTO contacts (name, email, message, status) VALUES (:name, :email, :message, 'unread')";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([
+        ':name' => $clean_name,
+        ':email' => $clean_email,
+        ':message' => $clean_message
+    ]);
 
-if (!$stmt) {
-    http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Database error: ' . $conn->error]);
-    exit;
-}
+    $contactId = $pdo->lastInsertId();
 
-// Bind parameters
-$stmt->bind_param('sss', $name, $email, $message);
+    // Optional: trigger email notification if ALLOWED_NOTIFICATION_EMAIL is set in env
+    $notifyTo = getenv('NOTIFY_EMAIL') ?: '';
+    if ($notifyTo) {
+        // Keep mail sending simple; consider using a proper mail library in production
+        $subject = 'New Contact Message';
+        $body = "Name: $clean_name\nEmail: $clean_email\nMessage:\n$clean_message";
+        @mail($notifyTo, $subject, $body);
+    }
 
-// Execute query
-if ($stmt->execute()) {
     echo json_encode([
         'success' => true,
         'message' => 'Your message has been sent successfully! I\'ll get back to you soon.',
-        'contact_id' => $stmt->insert_id
+        'contact_id' => $contactId
     ]);
-} else {
+} catch (PDOException $e) {
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Error saving message: ' . $stmt->error]);
+    // Log $e->getMessage() to a file on the server if needed; don't reveal internals to the client
+    error_log('DB error in submit-contact: ' . $e->getMessage());
+    echo json_encode(['success' => false, 'message' => 'Error saving message']);
 }
 
-$stmt->close();
-$conn->close();
 ?>

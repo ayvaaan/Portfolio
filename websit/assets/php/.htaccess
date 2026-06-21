@@ -1,0 +1,7 @@
+# Protect the config file from being served directly by Apache
+<Files "config.php">
+    Require all denied
+</Files>
+
+# If you need to allow requests to submit-contact.php, do not block it here.
+# To further harden, place sensitive configuration outside the web root or use server-side access rules.

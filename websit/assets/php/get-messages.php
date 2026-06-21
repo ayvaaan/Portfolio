@@ -1,110 +1,93 @@
 <?php
 header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST');
+require_once __DIR__ . '/config.php';
 
-require_once 'config.php';
-
-// Simple session-based authentication (use proper authentication in production)
+// Start session and check authentication
 session_start();
 
-// Only allow authenticated requests (you can implement proper authentication)
-if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    // Get all messages or specific message
-    
-    if (isset($_GET['action'])) {
+// CORS
+if (ALLOWED_ORIGIN) {
+    header('Access-Control-Allow-Origin: ' . ALLOWED_ORIGIN);
+} else {
+    header('Access-Control-Allow-Origin: *');
+}
+header('Access-Control-Allow-Methods: GET, POST');
+
+if (!isset($_SESSION['admin_authenticated']) || $_SESSION['admin_authenticated'] !== true) {
+    http_response_code(401);
+    echo json_encode(['success' => false, 'message' => 'Unauthorized']);
+    exit;
+}
+
+try {
+    if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+        if (!isset($_GET['action'])) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Missing action']);
+            exit;
+        }
+
         $action = $_GET['action'];
-        
+
         if ($action === 'get_all') {
-            // Get all messages
-            $sql = "SELECT id, name, email, message, created_at, status FROM contacts ORDER BY created_at DESC";
-            $result = $conn->query($sql);
-            
-            if (!$result) {
-                http_response_code(500);
-                echo json_encode(['success' => false, 'message' => 'Query error: ' . $conn->error]);
-                exit;
-            }
-            
-            $messages = [];
-            while ($row = $result->fetch_assoc()) {
-                $messages[] = $row;
-            }
-            
+            $stmt = $pdo->query("SELECT id, name, email, message, created_at, status FROM contacts ORDER BY created_at DESC");
+            $messages = $stmt->fetchAll();
             echo json_encode(['success' => true, 'messages' => $messages]);
-            
+            exit;
         } elseif ($action === 'get_stats') {
-            // Get message statistics
-            $totalSql = "SELECT COUNT(*) as total FROM contacts";
-            $unreadSql = "SELECT COUNT(*) as unread FROM contacts WHERE status = 'unread'";
-            
-            $totalResult = $conn->query($totalSql);
-            $unreadResult = $conn->query($unreadSql);
-            
-            if (!$totalResult || !$unreadResult) {
-                http_response_code(500);
-                echo json_encode(['success' => false, 'message' => 'Query error']);
-                exit;
-            }
-            
-            $totalRow = $totalResult->fetch_assoc();
-            $unreadRow = $unreadResult->fetch_assoc();
-            
-            echo json_encode([
-                'success' => true,
-                'total' => $totalRow['total'],
-                'unread' => $unreadRow['unread']
-            ]);
-            
+            $total = $pdo->query("SELECT COUNT(*) FROM contacts")->fetchColumn();
+            $unread = $pdo->query("SELECT COUNT(*) FROM contacts WHERE status = 'unread'")->fetchColumn();
+            echo json_encode(['success' => true, 'total' => (int)$total, 'unread' => (int)$unread]);
+            exit;
         } else {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'Unknown action']);
+            exit;
         }
     }
-    
-} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Mark as read or delete message
-    
-    if (!isset($_POST['action']) || !isset($_POST['id'])) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'Missing parameters']);
-        exit;
-    }
-    
-    $action = $_POST['action'];
-    $id = intval($_POST['id']);
-    
-    if ($action === 'mark_read') {
-        $sql = "UPDATE contacts SET status = 'read' WHERE id = ?";
-        $stmt = $conn->prepare($sql);
-        $stmt->bind_param('i', $id);
-        
-        if ($stmt->execute()) {
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        // Accept form or JSON
+        $input = $_POST;
+        $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+        if (stripos($contentType, 'application/json') !== false) {
+            $raw = file_get_contents('php://input');
+            $json = json_decode($raw, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($json)) {
+                $input = array_merge($input, $json);
+            }
+        }
+
+        if (!isset($input['action']) || !isset($input['id'])) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Missing parameters']);
+            exit;
+        }
+
+        $action = $input['action'];
+        $id = (int)$input['id'];
+
+        if ($action === 'mark_read') {
+            $stmt = $pdo->prepare("UPDATE contacts SET status = 'read' WHERE id = :id");
+            $stmt->execute([':id' => $id]);
             echo json_encode(['success' => true, 'message' => 'Message marked as read']);
-        } else {
-            http_response_code(500);
-            echo json_encode(['success' => false, 'message' => 'Error: ' . $stmt->error]);
-        }
-        $stmt->close();
-        
-    } elseif ($action === 'delete') {
-        $sql = "DELETE FROM contacts WHERE id = ?";
-        $stmt = $conn->prepare($sql);
-        $stmt->bind_param('i', $id);
-        
-        if ($stmt->execute()) {
+            exit;
+        } elseif ($action === 'delete') {
+            $stmt = $pdo->prepare("DELETE FROM contacts WHERE id = :id");
+            $stmt->execute([':id' => $id]);
             echo json_encode(['success' => true, 'message' => 'Message deleted']);
+            exit;
         } else {
-            http_response_code(500);
-            echo json_encode(['success' => false, 'message' => 'Error: ' . $stmt->error]);
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Unknown action']);
+            exit;
         }
-        $stmt->close();
-        
-    } else {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'Unknown action']);
     }
+} catch (PDOException $e) {
+    error_log('get-messages error: ' . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['success' => false, 'message' => 'Server error']);
+    exit;
 }
 
-$conn->close();
 ?>

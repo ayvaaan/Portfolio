@@ -1,0 +1,8 @@
+# SMTP configuration (example) added to .env.example
+
+# SMTP settings for PHPMailer (optional)
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASS=
+SMTP_SECURE=tls
